@@ -5,6 +5,10 @@ use winit::{
     dpi::{LogicalSize}
 };
 
+struct UserData {
+    clear_color: wgpu::Color
+}
+
 struct MainState {
     surface: wgpu::Surface,
     adapter: wgpu::Adapter,
@@ -13,7 +17,8 @@ struct MainState {
     swap_chain_desc: wgpu::SwapChainDescriptor,
     swap_chain: wgpu::SwapChain,
 
-    size: winit::dpi::PhysicalSize<u32>
+    size: winit::dpi::PhysicalSize<u32>,
+    user_data: UserData
 }
 
 impl MainState {
@@ -37,6 +42,7 @@ impl MainState {
             present_mode: wgpu::PresentMode::Vsync
         };
         let swap_chain = device.create_swap_chain(&surface, &swap_chain_desc);
+        let user_data = UserData {clear_color: wgpu::Color{r:0.1, g: 0.2, b: 0.3, a: 1.0}};
         Self {
             surface,
             adapter,
@@ -44,11 +50,22 @@ impl MainState {
             queue,
             swap_chain_desc,
             swap_chain,
-            size
+            size,
+            user_data
         }
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
+        if let WindowEvent::CursorMoved{
+            device_id, position, ..
+        } = event {
+            self.user_data.clear_color = wgpu::Color{
+                r: position.x as f64 / self.size.width as f64,
+                g: position.y as f64 / self.size.height as f64,
+                ..self.user_data.clear_color
+            };
+            return true;
+        }
         false
     }
 
@@ -70,12 +87,7 @@ impl MainState {
                         resolve_target: None,
                         load_op: wgpu::LoadOp::Clear,
                         store_op: wgpu::StoreOp::Store,
-                        clear_color: wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0
-                        }
+                        clear_color: self.user_data.clear_color
                     }
                 ],
                 depth_stencil_attachment: None
