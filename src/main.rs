@@ -6,7 +6,8 @@ use winit::{
 };
 
 struct UserData {
-    clear_color: wgpu::Color
+    clear_color: wgpu::Color,
+    triangle_render_pipeline: wgpu::RenderPipeline
 }
 
 struct MainState {
@@ -19,6 +20,61 @@ struct MainState {
 
     size: winit::dpi::PhysicalSize<u32>,
     user_data: UserData
+}
+
+fn create_render_pipeline_from_shaders(
+    device: &wgpu::Device,
+    vert_src: &'static str,
+    frag_src: &'static str
+) -> wgpu::RenderPipeline {
+    let vs_spirv = glsl_to_spirv::compile(vert_src, glsl_to_spirv::ShaderType::Vertex).unwrap();
+    let fs_spirv = glsl_to_spirv::compile(frag_src, glsl_to_spirv::ShaderType::Fragment).unwrap();
+
+    let vs_data = wgpu::read_spirv(vs_spirv).unwrap();
+    let fs_data = wgpu::read_spirv(fs_spirv).unwrap();
+
+    let vs_module = device.create_shader_module(&vs_data);
+    let fs_module = device.create_shader_module(&fs_data);
+
+    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor{
+        bind_group_layouts: &[]
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor{
+        layout: &render_pipeline_layout,
+        vertex_stage: wgpu::ProgrammableStageDescriptor{
+            module: &vs_module,
+            entry_point: "main"
+        },
+        fragment_stage: Some(wgpu::ProgrammableStageDescriptor{
+            module: &fs_module,
+            entry_point: "main"
+        }),
+        rasterization_state: Some(
+            wgpu::RasterizationStateDescriptor {
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: wgpu::CullMode::Back,
+                depth_bias: 0,
+                depth_bias_slope_scale: 0.0,
+                depth_bias_clamp: 0.0
+            }
+        ),
+        color_states: &[
+            wgpu::ColorStateDescriptor {
+                format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                color_blend: wgpu::BlendDescriptor::REPLACE,
+                alpha_blend: wgpu::BlendDescriptor::REPLACE,
+                write_mask: wgpu::ColorWrite::ALL
+            }
+        ],
+        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
+        depth_stencil_state: None,
+        index_format: wgpu::IndexFormat::Uint16,
+        vertex_buffers: &[],
+        sample_count: 1,
+        sample_mask: !0,
+        alpha_to_coverage_enabled: false
+    })
 }
 
 impl MainState {
@@ -42,7 +98,17 @@ impl MainState {
             present_mode: wgpu::PresentMode::Vsync
         };
         let swap_chain = device.create_swap_chain(&surface, &swap_chain_desc);
-        let user_data = UserData {clear_color: wgpu::Color{r:0.1, g: 0.2, b: 0.3, a: 1.0}};
+
+        let vs_src = include_str!("shader_vert.glsl");
+        let fs_src = include_str!("shader_frag.glsl");
+
+        let render_pipeline = create_render_pipeline_from_shaders(&device, vs_src, fs_src);
+
+        let user_data = UserData {
+            clear_color: wgpu::Color{r:0.1, g: 0.2, b: 0.3, a: 1.0},
+            triangle_render_pipeline: render_pipeline
+        };
+
         Self {
             surface,
             adapter,
@@ -80,7 +146,7 @@ impl MainState {
         });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[
                     wgpu::RenderPassColorAttachmentDescriptor {
                         attachment: &frame.view,
@@ -92,6 +158,9 @@ impl MainState {
                 ],
                 depth_stencil_attachment: None
             });
+
+            render_pass.set_pipeline(&self.user_data.triangle_render_pipeline);
+            render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(&[
