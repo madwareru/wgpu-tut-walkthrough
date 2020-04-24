@@ -7,7 +7,9 @@ use winit::{
 
 struct UserData {
     clear_color: wgpu::Color,
-    triangle_render_pipeline: wgpu::RenderPipeline
+    triangle_render_pipeline: wgpu::RenderPipeline,
+    colored_render_pipeline: wgpu::RenderPipeline,
+    pipeline_switched: bool
 }
 
 struct MainState {
@@ -101,12 +103,17 @@ impl MainState {
 
         let vs_src = include_str!("shader_vert.glsl");
         let fs_src = include_str!("shader_frag.glsl");
+        let vs_src2 = include_str!("shader_vert2.glsl");
+        let fs_src2 = include_str!("shader_frag2.glsl");
 
         let render_pipeline = create_render_pipeline_from_shaders(&device, vs_src, fs_src);
+        let colored_pipeline = create_render_pipeline_from_shaders(&device, vs_src2, fs_src2);
 
         let user_data = UserData {
             clear_color: wgpu::Color{r:0.1, g: 0.2, b: 0.3, a: 1.0},
-            triangle_render_pipeline: render_pipeline
+            triangle_render_pipeline: render_pipeline,
+            colored_render_pipeline: colored_pipeline,
+            pipeline_switched: false
         };
 
         Self {
@@ -123,13 +130,23 @@ impl MainState {
 
     fn input(&mut self, event: &WindowEvent) -> bool {
         if let WindowEvent::CursorMoved{
-            device_id, position, ..
+            position, ..
         } = event {
             self.user_data.clear_color = wgpu::Color{
                 r: position.x as f64 / self.size.width as f64,
                 g: position.y as f64 / self.size.height as f64,
                 ..self.user_data.clear_color
             };
+            return true;
+        } else if let WindowEvent::KeyboardInput {
+            input: KeyboardInput{
+                state: ElementState::Released,
+                virtual_keycode: Some(VirtualKeyCode::Space),
+                ..
+            },
+            ..
+        } = event {
+            self.user_data.pipeline_switched = !self.user_data.pipeline_switched;
             return true;
         }
         false
@@ -159,7 +176,11 @@ impl MainState {
                 depth_stencil_attachment: None
             });
 
-            render_pass.set_pipeline(&self.user_data.triangle_render_pipeline);
+            render_pass.set_pipeline(if self.user_data.pipeline_switched {
+                &self.user_data.colored_render_pipeline
+            } else {
+                &self.user_data.triangle_render_pipeline
+            });
             render_pass.draw(0..3, 0..1);
         }
 
