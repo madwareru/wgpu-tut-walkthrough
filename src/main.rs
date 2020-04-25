@@ -5,8 +5,45 @@ use winit::{
     dpi::{LogicalSize}
 };
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct VertexData {
+    position: [f32; 3],
+    color: [f32; 3]
+}
+
+impl VertexData {
+    fn desc<'a>() -> wgpu::VertexBufferDescriptor<'a> {
+        use std::mem;
+        wgpu::VertexBufferDescriptor{
+            stride: mem::size_of::<VertexData> as wgpu::BufferAddress,
+            step_mode: wgpu::InputStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttributeDescriptor {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float3
+                },
+                wgpu::VertexAttributeDescriptor {
+                    offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float3
+                }
+            ]
+        }
+    }
+}
+
+const VERTICES: &[VertexData] = &[
+    VertexData{ position: [ 0.0, -0.5, 0.0], color: [1.0, 0.0, 0.0]},
+    VertexData{ position: [-0.5,  0.5, 0.0], color: [0.0, 1.0, 0.0]},
+    VertexData{ position: [ 0.5,  0.5, 0.0], color: [0.0, 0.0, 1.0]},
+];
+
 struct UserData {
     clear_color: wgpu::Color,
+    vertex_buffer: wgpu::Buffer,
+    num_vertices: u32,
     triangle_render_pipeline: wgpu::RenderPipeline,
     colored_render_pipeline: wgpu::RenderPipeline,
     pipeline_switched: bool
@@ -72,7 +109,9 @@ fn create_render_pipeline_from_shaders(
         primitive_topology: wgpu::PrimitiveTopology::TriangleList,
         depth_stencil_state: None,
         index_format: wgpu::IndexFormat::Uint16,
-        vertex_buffers: &[],
+        vertex_buffers: &[
+            VertexData::desc()
+        ],
         sample_count: 1,
         sample_mask: !0,
         alpha_to_coverage_enabled: false
@@ -108,12 +147,17 @@ impl MainState {
 
         let render_pipeline = create_render_pipeline_from_shaders(&device, vs_src, fs_src);
         let colored_pipeline = create_render_pipeline_from_shaders(&device, vs_src2, fs_src2);
+        let vertex_buffer = device
+            .create_buffer_mapped(VERTICES.len(), wgpu::BufferUsage::VERTEX)
+            .fill_from_slice(VERTICES);
 
         let user_data = UserData {
             clear_color: wgpu::Color{r:0.1, g: 0.2, b: 0.3, a: 1.0},
             triangle_render_pipeline: render_pipeline,
             colored_render_pipeline: colored_pipeline,
-            pipeline_switched: false
+            pipeline_switched: false,
+            vertex_buffer,
+            num_vertices: VERTICES.len() as u32
         };
 
         Self {
@@ -181,7 +225,8 @@ impl MainState {
             } else {
                 &self.user_data.triangle_render_pipeline
             });
-            render_pass.draw(0..3, 0..1);
+            render_pass.set_vertex_buffers(0, &[(&self.user_data.vertex_buffer, 0)]);
+            render_pass.draw(0..self.user_data.num_vertices, 0..1);
         }
 
         self.queue.submit(&[
