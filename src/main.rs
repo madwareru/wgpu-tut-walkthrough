@@ -15,8 +15,9 @@ struct VertexData {
 impl VertexData {
     fn desc<'a>() -> wgpu::VertexBufferDescriptor<'a> {
         use std::mem;
+        let stride = mem::size_of::<VertexData>() as wgpu::BufferAddress;
         wgpu::VertexBufferDescriptor{
-            stride: mem::size_of::<VertexData> as wgpu::BufferAddress,
+            stride,
             step_mode: wgpu::InputStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttributeDescriptor {
