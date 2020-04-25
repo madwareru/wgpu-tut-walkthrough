@@ -35,16 +35,38 @@ impl VertexData {
     }
 }
 
-const VERTICES: &[VertexData] = &[
+const TRIANGLE_VERTICES: &[VertexData] = &[
     VertexData{ position: [ 0.0, -0.5, 0.0], color: [1.0, 0.0, 0.0]},
     VertexData{ position: [-0.5,  0.5, 0.0], color: [0.0, 1.0, 0.0]},
     VertexData{ position: [ 0.5,  0.5, 0.0], color: [0.0, 0.0, 1.0]},
 ];
 
+const TRIANGLE_INDICES: &[u16] = &[
+    0, 1, 2,
+];
+
+const QUAD_VERTICES: &[VertexData] = &[
+    VertexData{ position: [-0.5, -0.5, 0.0], color: [1.0, 0.0, 0.0]},
+    VertexData{ position: [-0.5,  0.5, 0.0], color: [0.0, 1.0, 0.0]},
+    VertexData{ position: [ 0.5,  0.5, 0.0], color: [0.0, 0.0, 1.0]},
+    VertexData{ position: [ 0.5, -0.5, 0.0], color: [1.0, 1.0, 0.0]},
+];
+
+const QUAD_INDICES: &[u16] = &[
+    0, 1, 2,
+    2, 3, 0,
+];
+
+struct Mesh {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32
+}
+
 struct UserData {
     clear_color: wgpu::Color,
-    vertex_buffer: wgpu::Buffer,
-    num_vertices: u32,
+    triangle_mesh: Mesh,
+    quad_mesh: Mesh,
     triangle_render_pipeline: wgpu::RenderPipeline,
     colored_render_pipeline: wgpu::RenderPipeline,
     pipeline_switched: bool
@@ -119,6 +141,20 @@ fn create_render_pipeline_from_shaders(
     })
 }
 
+fn create_mesh(device: &wgpu::Device, vertices: &[VertexData], indices: &[u16]) -> Mesh {
+    let vertex_buffer = device
+        .create_buffer_mapped(vertices.len(), wgpu::BufferUsage::VERTEX)
+        .fill_from_slice(vertices);
+    let index_buffer = device
+        .create_buffer_mapped(indices.len(), wgpu::BufferUsage::INDEX)
+        .fill_from_slice(indices);
+    Mesh {
+        vertex_buffer,
+        index_buffer,
+        num_indices: indices.len() as u32
+    }
+}
+
 impl MainState {
     fn new(window: &winit::window::Window) -> Self {
         let size = window.inner_size();
@@ -148,17 +184,17 @@ impl MainState {
 
         let render_pipeline = create_render_pipeline_from_shaders(&device, vs_src, fs_src);
         let colored_pipeline = create_render_pipeline_from_shaders(&device, vs_src2, fs_src2);
-        let vertex_buffer = device
-            .create_buffer_mapped(VERTICES.len(), wgpu::BufferUsage::VERTEX)
-            .fill_from_slice(VERTICES);
+
+        let triangle_mesh = create_mesh(&device, TRIANGLE_VERTICES, TRIANGLE_INDICES);
+        let quad_mesh = create_mesh(&device, QUAD_VERTICES, QUAD_INDICES);
 
         let user_data = UserData {
             clear_color: wgpu::Color{r:0.1, g: 0.2, b: 0.3, a: 1.0},
             triangle_render_pipeline: render_pipeline,
             colored_render_pipeline: colored_pipeline,
             pipeline_switched: false,
-            vertex_buffer,
-            num_vertices: VERTICES.len() as u32
+            triangle_mesh,
+            quad_mesh
         };
 
         Self {
@@ -226,8 +262,16 @@ impl MainState {
             } else {
                 &self.user_data.triangle_render_pipeline
             });
-            render_pass.set_vertex_buffers(0, &[(&self.user_data.vertex_buffer, 0)]);
-            render_pass.draw(0..self.user_data.num_vertices, 0..1);
+
+            let mesh = if self.user_data.pipeline_switched {
+                &self.user_data.quad_mesh
+            } else {
+                &self.user_data.triangle_mesh
+            };
+
+            render_pass.set_vertex_buffers(0, &[(&mesh.vertex_buffer, 0)]);
+            render_pass.set_index_buffer(&mesh.index_buffer, 0);
+            render_pass.draw_indexed(0..mesh.num_indices, 0, 0..1);
         }
 
         self.queue.submit(&[
