@@ -4,12 +4,14 @@ use winit::{
     window::{WindowBuilder},
     dpi::{LogicalSize}
 };
+use wgpu::{BufferAsyncMapping, BufferMapAsyncResult};
+use image::GenericImageView;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct VertexData {
     position: [f32; 3],
-    color: [f32; 3]
+    uv: [f32; 2]
 }
 
 impl VertexData {
@@ -28,7 +30,7 @@ impl VertexData {
                 wgpu::VertexAttributeDescriptor {
                     offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float3
+                    format: wgpu::VertexFormat::Float2
                 }
             ]
         }
@@ -36,9 +38,9 @@ impl VertexData {
 }
 
 const TRIANGLE_VERTICES: &[VertexData] = &[
-    VertexData{ position: [ 0.0, -0.5, 0.0], color: [1.0, 0.0, 0.0]},
-    VertexData{ position: [-0.5,  0.5, 0.0], color: [0.0, 1.0, 0.0]},
-    VertexData{ position: [ 0.5,  0.5, 0.0], color: [0.0, 0.0, 1.0]},
+    VertexData{ position: [ 0.0, -0.5, 0.0], uv: [0.5, 0.0]},
+    VertexData{ position: [-0.5,  0.5, 0.0], uv: [0.0, 1.0]},
+    VertexData{ position: [ 0.5,  0.5, 0.0], uv: [1.0, 1.0]},
 ];
 
 const TRIANGLE_INDICES: &[u16] = &[
@@ -46,10 +48,10 @@ const TRIANGLE_INDICES: &[u16] = &[
 ];
 
 const QUAD_VERTICES: &[VertexData] = &[
-    VertexData{ position: [-0.5, -0.5, 0.0], color: [1.0, 0.0, 0.0]},
-    VertexData{ position: [-0.5,  0.5, 0.0], color: [0.0, 1.0, 0.0]},
-    VertexData{ position: [ 0.5,  0.5, 0.0], color: [0.0, 0.0, 1.0]},
-    VertexData{ position: [ 0.5, -0.5, 0.0], color: [1.0, 1.0, 0.0]},
+    VertexData{ position: [-0.5, -0.5, 0.0], uv: [0.0, 0.0]},
+    VertexData{ position: [-0.5,  0.5, 0.0], uv: [0.0, 1.0]},
+    VertexData{ position: [ 0.5,  0.5, 0.0], uv: [1.0, 1.0]},
+    VertexData{ position: [ 0.5, -0.5, 0.0], uv: [1.0, 0.0]},
 ];
 
 const QUAD_INDICES: &[u16] = &[
@@ -63,13 +65,25 @@ struct Mesh {
     num_indices: u32
 }
 
+struct TextureHandle {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    sampler: wgpu::Sampler
+}
+
+struct Texture {
+    handle: TextureHandle,
+    bind_group: wgpu::BindGroup
+}
+
 struct UserData {
     clear_color: wgpu::Color,
     triangle_mesh: Mesh,
     quad_mesh: Mesh,
-    triangle_render_pipeline: wgpu::RenderPipeline,
-    colored_render_pipeline: wgpu::RenderPipeline,
-    pipeline_switched: bool
+    render_pipeline: wgpu::RenderPipeline,
+    mode_switched: bool,
+    necromancer_texture: Texture,
+    mage_texture: Texture
 }
 
 struct MainState {
@@ -87,7 +101,8 @@ struct MainState {
 fn create_render_pipeline_from_shaders(
     device: &wgpu::Device,
     vert_src: &'static str,
-    frag_src: &'static str
+    frag_src: &'static str,
+    bind_group_layout: &wgpu::BindGroupLayout
 ) -> wgpu::RenderPipeline {
     let vs_spirv = glsl_to_spirv::compile(vert_src, glsl_to_spirv::ShaderType::Vertex).unwrap();
     let fs_spirv = glsl_to_spirv::compile(frag_src, glsl_to_spirv::ShaderType::Fragment).unwrap();
@@ -99,7 +114,7 @@ fn create_render_pipeline_from_shaders(
     let fs_module = device.create_shader_module(&fs_data);
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor{
-        bind_group_layouts: &[]
+        bind_group_layouts: &[&bind_group_layout]
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor{
@@ -148,11 +163,99 @@ fn create_mesh(device: &wgpu::Device, vertices: &[VertexData], indices: &[u16]) 
     let index_buffer = device
         .create_buffer_mapped(indices.len(), wgpu::BufferUsage::INDEX)
         .fill_from_slice(indices);
+
     Mesh {
         vertex_buffer,
         index_buffer,
         num_indices: indices.len() as u32
     }
+}
+
+fn create_texture_bind_group(
+    device: &wgpu::Device,
+    texture_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    texture_bind_group_layout: &wgpu::BindGroupLayout
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor{
+        layout: &texture_bind_group_layout,
+        bindings: &[
+            wgpu::Binding {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&texture_view)
+            },
+            wgpu::Binding {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler)
+            }
+        ]
+    })
+}
+
+fn create_texture(device: &wgpu::Device, bytes: &[u8]) -> (TextureHandle, wgpu::CommandBuffer) {
+    let diffuse_image = image::load_from_memory(bytes).unwrap();
+    let diffuse_rgba = diffuse_image.as_rgba8().unwrap();
+
+    use image::GenericImageView;
+    let (width, height) = diffuse_image.dimensions();
+
+    let size = wgpu::Extent3d{
+        width,
+        height,
+        depth: 1
+    };
+
+    let texture = device.create_texture(&wgpu::TextureDescriptor{
+        size,
+        array_layer_count: 1,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsage::SAMPLED | wgpu::TextureUsage::COPY_DST
+    });
+
+    let diffuse_buffer = device
+        .create_buffer_mapped(diffuse_rgba.len(), wgpu::BufferUsage::COPY_SRC)
+        .fill_from_slice(&diffuse_rgba);
+
+    let mut encoder = device.create_command_encoder(&Default::default());
+
+    encoder.copy_buffer_to_texture(
+        wgpu::BufferCopyView {
+            buffer: &diffuse_buffer,
+            offset: 0,
+            row_pitch: 4 * width,
+            image_height: height
+        },
+        wgpu::TextureCopyView {
+            texture: &texture,
+            mip_level: 0,
+            array_layer: 0,
+            origin: wgpu::Origin3d::ZERO
+        },
+        size
+    );
+
+    let command_buffer = encoder.finish();
+
+    let view = texture.create_default_view();
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor{
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::FilterMode::Nearest,
+        lod_min_clamp: -100.0,
+        lod_max_clamp: 100.0,
+        compare_function: wgpu::CompareFunction::Always
+    });
+
+    (
+        TextureHandle { texture, view, sampler },
+        command_buffer
+    )
 }
 
 impl MainState {
@@ -162,7 +265,7 @@ impl MainState {
         let adapter = wgpu::Adapter::request(&wgpu::RequestAdapterOptions{
             ..Default::default()
         }).unwrap();
-        let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor{
+        let (device, mut queue) = adapter.request_device(&wgpu::DeviceDescriptor{
             extensions: wgpu::Extensions {
                 anisotropic_filtering: false
             },
@@ -179,22 +282,70 @@ impl MainState {
 
         let vs_src = include_str!("shader_vert.glsl");
         let fs_src = include_str!("shader_frag.glsl");
-        let vs_src2 = include_str!("shader_vert2.glsl");
-        let fs_src2 = include_str!("shader_frag2.glsl");
 
-        let render_pipeline = create_render_pipeline_from_shaders(&device, vs_src, fs_src);
-        let colored_pipeline = create_render_pipeline_from_shaders(&device, vs_src2, fs_src2);
+        let necromancer_bytes = include_bytes!("necromancer.png");
+        let mage_bytes = include_bytes!("mage.png");
+        let (necromancer_texture_handle, necromancer_c_buffer) = create_texture(&device, necromancer_bytes);
+        let (mage_texture_handle, mage_c_buffer) = create_texture(&device, mage_bytes);
+
+        queue.submit(&[necromancer_c_buffer, mage_c_buffer]);
+
+        let texture_bind_group_layout = device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor{
+                bindings: &[
+                    wgpu::BindGroupLayoutBinding {
+                        binding: 0,
+                        visibility: wgpu::ShaderStage::FRAGMENT,
+                        ty: wgpu::BindingType::SampledTexture {
+                            multisampled: false,
+                            dimension: wgpu::TextureViewDimension::D2
+                        }
+                    },
+                    wgpu::BindGroupLayoutBinding {
+                        binding: 1,
+                        visibility: wgpu::ShaderStage::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler
+                    }
+                ]
+            });
+
+        let necromancer_bind_group = create_texture_bind_group(
+            &device,
+            &necromancer_texture_handle.view,
+            &necromancer_texture_handle.sampler,
+            &texture_bind_group_layout
+        );
+
+        let mage_bind_group = create_texture_bind_group(
+            &device,
+            &mage_texture_handle.view,
+            &mage_texture_handle.sampler,
+            &texture_bind_group_layout
+        );
+
+        let necromancer_texture = Texture {
+            handle: necromancer_texture_handle,
+            bind_group: necromancer_bind_group
+        };
+
+        let mage_texture = Texture {
+            handle: mage_texture_handle,
+            bind_group: mage_bind_group
+        };
+
+        let render_pipeline = create_render_pipeline_from_shaders(&device, vs_src, fs_src, &texture_bind_group_layout);
 
         let triangle_mesh = create_mesh(&device, TRIANGLE_VERTICES, TRIANGLE_INDICES);
         let quad_mesh = create_mesh(&device, QUAD_VERTICES, QUAD_INDICES);
 
         let user_data = UserData {
             clear_color: wgpu::Color{r:0.1, g: 0.2, b: 0.3, a: 1.0},
-            triangle_render_pipeline: render_pipeline,
-            colored_render_pipeline: colored_pipeline,
-            pipeline_switched: false,
+            render_pipeline,
+            mode_switched: false,
             triangle_mesh,
-            quad_mesh
+            quad_mesh,
+            necromancer_texture,
+            mage_texture
         };
 
         Self {
@@ -227,7 +378,7 @@ impl MainState {
             },
             ..
         } = event {
-            self.user_data.pipeline_switched = !self.user_data.pipeline_switched;
+            self.user_data.mode_switched = !self.user_data.mode_switched;
             return true;
         }
         false
@@ -257,20 +408,23 @@ impl MainState {
                 depth_stencil_attachment: None
             });
 
-            render_pass.set_pipeline(if self.user_data.pipeline_switched {
-                &self.user_data.colored_render_pipeline
-            } else {
-                &self.user_data.triangle_render_pipeline
-            });
+            render_pass.set_pipeline(&self.user_data.render_pipeline);
 
-            let mesh = if self.user_data.pipeline_switched {
+            let mesh = if self.user_data.mode_switched {
                 &self.user_data.quad_mesh
             } else {
                 &self.user_data.triangle_mesh
             };
 
+            let texture = if self.user_data.mode_switched {
+                &self.user_data.mage_texture
+            } else {
+                &self.user_data.necromancer_texture
+            };
+
             render_pass.set_vertex_buffers(0, &[(&mesh.vertex_buffer, 0)]);
             render_pass.set_index_buffer(&mesh.index_buffer, 0);
+            render_pass.set_bind_group(0, &texture.bind_group, &[]);
             render_pass.draw_indexed(0..mesh.num_indices, 0, 0..1);
         }
 
