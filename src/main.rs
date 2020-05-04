@@ -390,7 +390,7 @@ impl MainState {
         };
 
         let camera = Camera {
-            eye: (0.0, 1.0, -2.0).into(),
+            eye: (0.0, 0.0, -2.0).into(),
             target: (0.0, 0.0, 0.0).into(),
             up: cgmath::Vector3::unit_y(),
             aspect: swap_chain_desc.width as f32 / swap_chain_desc.height as f32,
@@ -479,6 +479,8 @@ impl MainState {
                 g: position.y as f64 / self.size.height as f64,
                 ..self.user_data.clear_color
             };
+            self.user_data.camera.eye.x = self.user_data.clear_color.r as f32 - 0.5;
+            self.user_data.camera.eye.y = self.user_data.clear_color.g as f32 - 0.5;
             return true;
         } else if let WindowEvent::KeyboardInput {
             input: KeyboardInput{
