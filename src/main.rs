@@ -98,7 +98,6 @@ impl Uniforms {
             view_proj: cgmath::Matrix4::identity()
         }
     }
-
     fn update_view_proj(&mut self, camera: &Camera) {
         self.view_proj = camera.to_view_proj();
     }
@@ -496,7 +495,23 @@ impl MainState {
     }
 
     fn update(&mut self) {
+        self.user_data.uniforms.update_view_proj(&self.user_data.camera);
 
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor{
+            todo: 0
+        });
+
+        let staging_buffer =self.device
+            .create_buffer_mapped(1, wgpu::BufferUsage::COPY_SRC)
+            .fill_from_slice(&self.user_data.uniforms);
+
+        encoder.copy_buffer_to_buffer(
+            &staging_buffer, 0,
+            &self.user_data.uniform_buffer, 0,
+            std::mem::size_of::<Uniforms>() as wgpu::BufferAddress
+        );
+
+        self.queue.submit(&[encoder.finish()]);
     }
 
     fn render(&mut self) {
