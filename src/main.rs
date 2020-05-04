@@ -479,8 +479,14 @@ impl MainState {
                 g: position.y as f64 / self.size.height as f64,
                 ..self.user_data.clear_color
             };
-            self.user_data.camera.eye.x = self.user_data.clear_color.r as f32 - 0.5;
-            self.user_data.camera.eye.y = self.user_data.clear_color.g as f32 - 0.5;
+            let hw = (self.size.width / 2) as f32;
+            let hh = (self.size.height / 2) as f32;
+            self.user_data.camera.eye.x =
+                -((position.x as f32 - hw) / hw + 0.5) *
+                self.user_data.camera.aspect;
+            self.user_data.camera.eye.y = -((position.y as f32 - hh) / hh + 0.5);
+            self.user_data.camera.target.x = self.user_data.camera.eye.x;
+            self.user_data.camera.target.y = self.user_data.camera.eye.y;
             return true;
         } else if let WindowEvent::KeyboardInput {
             input: KeyboardInput{
