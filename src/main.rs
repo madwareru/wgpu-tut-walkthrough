@@ -503,7 +503,7 @@ impl MainState {
 
         let staging_buffer =self.device
             .create_buffer_mapped(1, wgpu::BufferUsage::COPY_SRC)
-            .fill_from_slice(&self.user_data.uniforms);
+            .fill_from_slice(&[self.user_data.uniforms]);
 
         encoder.copy_buffer_to_buffer(
             &staging_buffer, 0,
