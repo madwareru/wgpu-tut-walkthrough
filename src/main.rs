@@ -5,7 +5,7 @@ use winit::{
     dpi::{LogicalSize}
 };
 use wgpu::{BufferAsyncMapping, BufferMapAsyncResult};
-use image::GenericImageView;
+use std::time::Instant;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -36,6 +36,8 @@ impl VertexData {
         }
     }
 }
+
+const SINGLE_FRAME_MILLIS: u32 = 4;
 
 const TRIANGLE_VERTICES: &[VertexData] = &[
     VertexData{ position: [ 0.0,  0.5, 0.0], uv: [0.5, 0.0]},
@@ -88,18 +90,26 @@ impl Camera {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 struct Uniforms {
-    view_proj: cgmath::Matrix4<f32>
+    view_proj: cgmath::Matrix4<f32>,
+    model_matrix: cgmath::Matrix4<f32>
 }
 
 impl Uniforms {
     fn new() -> Self {
         use cgmath::SquareMatrix;
         Self {
-            view_proj: cgmath::Matrix4::identity()
+            view_proj: cgmath::Matrix4::identity(),
+            model_matrix: cgmath::Matrix4::identity()
         }
     }
     fn update_view_proj(&mut self, camera: &Camera) {
         self.view_proj = camera.to_view_proj();
+    }
+    fn update_model_rotation(&mut self, rotation: f32) {
+        use cgmath::Rotation3;
+        self.model_matrix = cgmath::Matrix4::from_angle_z(
+            cgmath::Rad(rotation)
+        );
     }
 }
 
@@ -122,6 +132,7 @@ struct Texture {
 
 struct UserData {
     camera: Camera,
+    sprite_rotation: f32,
     uniforms: Uniforms,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -446,6 +457,7 @@ impl MainState {
 
         let user_data = UserData {
             camera,
+            sprite_rotation: 0.0,
             uniforms,
             uniform_buffer,
             uniform_bind_group,
@@ -502,9 +514,13 @@ impl MainState {
         false
     }
 
-    fn update(&mut self) {
+    fn update(&mut self, tick: u64) {
+        self.user_data.sprite_rotation = ((tick as f32 / 100.0).sin() * 180.0).to_radians();
         self.user_data.uniforms.update_view_proj(&self.user_data.camera);
+        self.user_data.uniforms.update_model_rotation(self.user_data.sprite_rotation);
+    }
 
+    fn render(&mut self) {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor{
             todo: 0
         });
@@ -520,9 +536,7 @@ impl MainState {
         );
 
         self.queue.submit(&[encoder.finish()]);
-    }
 
-    fn render(&mut self) {
         let frame = self.swap_chain.get_next_texture();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             todo: 0
@@ -572,6 +586,8 @@ impl MainState {
 fn main() {
     let event_loop = EventLoop::new();
     let fixed_size = winit::dpi::Size::Logical(LogicalSize{width: 1280.0, height: 800.0});
+    let mut frame = 0u64;
+    let mut tick = 0u64;
     let window = WindowBuilder::new()
         .with_min_inner_size(fixed_size)
         .with_max_inner_size(fixed_size)
@@ -582,12 +598,15 @@ fn main() {
 
     let mut main_state = MainState::new(&window);
 
+    let mut last_instant = Instant::now();
+    let mut delta = 0u32;
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = {
             if let Event::WindowEvent { ref event, window_id} = event {
                 if window_id == window.id() {
                     if main_state.input(event) {
-                        ControlFlow::Wait
+                        ControlFlow::Poll
                     } else {
                         match event {
                             WindowEvent::CloseRequested |
@@ -599,18 +618,29 @@ fn main() {
                                 },
                                 ..
                             } => ControlFlow::Exit,
-                            _ => ControlFlow::Wait
+                            _ => ControlFlow::Poll
                         }
                     }
                 } else {
-                    ControlFlow::Wait
+                    ControlFlow::Poll
                 }
             } else if let Event::MainEventsCleared = event {
-                main_state.update();
+                let elapsed = last_instant.elapsed().as_millis() as u32;
+                delta += elapsed;
+                last_instant = Instant::now();
+
+                while delta >= SINGLE_FRAME_MILLIS {
+                    main_state.update(tick);
+                    tick += 1;
+                    delta -= SINGLE_FRAME_MILLIS;
+                }
+
                 main_state.render();
-                ControlFlow::Wait
+                println!("Frame {}, elapsed: {}", frame, elapsed);
+                frame += 1;
+                ControlFlow::Poll
             } else {
-                ControlFlow::Wait
+                ControlFlow::Poll
             }
         }
     });
